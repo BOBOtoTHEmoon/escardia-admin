@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
+import NotificationDropdown from './components/NotificationDropdown';
 import {
   LayoutDashboard,
   Users,
@@ -172,11 +173,9 @@ export default function DashboardLayout({
           </button>
 
           <div className="flex items-center space-x-4">
-            {/* Notifications */}
-            <button className="relative rounded-full p-2 text-gray-500 hover:bg-gray-100">
-              <Bell className="h-5 w-5" />
-              <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500" />
-            </button>
+           
+           {/* ✅ NOTIFICATION DROPDOWN */}
+<NotificationDropdown />
 
             {/* ✅ DYNAMIC PROFILE */}
             <div className="flex items-center space-x-3">
