@@ -81,24 +81,47 @@ export default function VendorsPage() {
     }
   };
 
-  const handleApproveVendor = async (vendorId: string) => {
-    if (!confirm('Approve this vendor?')) return;
+const handleApproveVendor = async (vendorId: string) => {
+  if (!confirm('Approve this vendor? They will be able to list cars immediately.')) return;
 
-    try {
-      await updateDoc(doc(db, 'vendors', vendorId), {
-        status: 'approved',
-        approvedAt: new Date().toISOString(),
-      });
+  try {
+    console.log('🔵 Approving vendor:', vendorId);
+    
+    // ✅ Update vendor status
+    const vendorRef = doc(db, 'vendors', vendorId);
+    await updateDoc(vendorRef, {
+      status: 'approved',
+      approvedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
 
-      setVendors(
-        vendors.map((v) => (v.id === vendorId ? { ...v, status: 'approved' as const } : v))
-      );
-      alert('Vendor approved successfully!');
-    } catch (error) {
-      console.error('Error approving vendor:', error);
-      alert('Failed to approve vendor');
-    }
-  };
+    console.log('✅ Vendor approved in Firebase');
+
+    // ✅ Update local state
+    setVendors(
+      vendors.map((v) => 
+        v.id === vendorId 
+          ? { ...v, status: 'approved' as const } 
+          : v
+      )
+    );
+    
+    // ✅ Update filtered vendors too
+    setFilteredVendors(
+      filteredVendors.map((v) => 
+        v.id === vendorId 
+          ? { ...v, status: 'approved' as const } 
+          : v
+      )
+    );
+
+    alert('✅ Vendor approved successfully! They can now list cars.');
+    console.log('✅ Vendor approval complete');
+  } catch (error: any) {
+    console.error('❌ Error approving vendor:', error);
+    alert(`Failed to approve vendor: ${error.message || 'Unknown error'}`);
+  }
+};
 
   const handleRejectVendor = async (vendorId: string) => {
     const reason = prompt('Reason for rejection (optional):');
