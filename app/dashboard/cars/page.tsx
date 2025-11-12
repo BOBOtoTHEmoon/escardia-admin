@@ -51,25 +51,39 @@ export default function CarsPage() {
     }
   }, [searchQuery, cars]);
 
-  const loadCars = async () => {
-    try {
-      setLoading(true);
-      const carsQuery = query(collection(db, 'cars'), orderBy('createdAt', 'desc'));
-      const snapshot = await getDocs(carsQuery);
+ const loadCars = async () => {
+  try {
+    setLoading(true);
+    const carsQuery = query(collection(db, 'cars'), orderBy('createdAt', 'desc'));
+    const carsSnapshot = await getDocs(carsQuery);
 
-      const carsData: Car[] = snapshot.docs.map((doc) => ({
+    // ✅ Get all vendors to check approval status
+    const vendorsSnapshot = await getDocs(collection(db, 'vendors'));
+    const approvedVendorIds = new Set<string>();
+    
+    vendorsSnapshot.forEach((doc) => {
+      const vendor = doc.data();
+      if (vendor.status === 'approved') {
+        approvedVendorIds.add(doc.id);
+      }
+    });
+
+    //Filter cars to only show approved vendor cars
+    const carsData: Car[] = carsSnapshot.docs
+      .map((doc) => ({
         id: doc.id,
         ...doc.data(),
-      })) as Car[];
+      }as Car))
+      .filter((car) => approvedVendorIds.has(car.vendorId)) as Car[];
 
-      setCars(carsData);
-      setFilteredCars(carsData);
-    } catch (error) {
-      console.error('Error loading cars:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    setCars(carsData);
+    setFilteredCars(carsData);
+  } catch (error) {
+    console.error('Error loading cars:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleDeleteCar = async (carId: string) => {
     if (!confirm('Are you sure you want to delete this car? This action cannot be undone.')) return;

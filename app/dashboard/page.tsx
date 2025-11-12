@@ -62,13 +62,29 @@ export default function DashboardPage() {
       const usersSnapshot = await getDocs(collection(db, 'users'));
       const totalUsers = usersSnapshot.size;
 
-      // Get vendors count
-      const vendorsSnapshot = await getDocs(collection(db, 'vendors'));
-      const totalVendors = vendorsSnapshot.size;
+      //Get APPROVED vendors count only
+const approvedVendorsQuery = query(
+  collection(db, 'vendors'),
+  where('status', '==', 'approved')
+);
+const approvedVendorsSnapshot = await getDocs(approvedVendorsQuery);
+const totalVendors = approvedVendorsSnapshot.size; // Only approved!
 
-      // Get cars count
-      const carsSnapshot = await getDocs(collection(db, 'cars'));
-      const totalCars = carsSnapshot.size;
+     //Only count approved vendor cars
+const carsSnapshot = await getDocs(collection(db, 'cars'));
+const vendorsSnapshot = await getDocs(collection(db, 'vendors'));
+
+const approvedVendorIds = new Set<string>();
+vendorsSnapshot.forEach((doc) => {
+  const vendor = doc.data();
+  if (vendor.status === 'approved') {
+    approvedVendorIds.add(doc.id);
+  }
+});
+
+const totalCars = carsSnapshot.docs.filter((doc) => 
+  approvedVendorIds.has(doc.data().vendorId)
+).length;
 
       // Get bookings
       const bookingsSnapshot = await getDocs(collection(db, 'bookings'));
