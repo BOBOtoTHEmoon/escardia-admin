@@ -193,8 +193,8 @@ export default function NotificationDropdown() {
       </button>
 
       {/* Dropdown */}
-      {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-xl bg-white shadow-xl ring-1 ring-black/5 z-[60]">
+{isOpen && (
+  <div className="fixed right-4 sm:right-6 top-[72px] w-80 sm:w-96 rounded-xl bg-white shadow-2xl ring-1 ring-black/10 z-[100]">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
             <div>
