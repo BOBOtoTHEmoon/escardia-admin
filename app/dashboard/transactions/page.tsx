@@ -1,274 +1,139 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, getDocs, query, orderBy } from 'firebase/firestore';
-import { Search, Download, DollarSign, TrendingUp, Calendar } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Banknote, CreditCard, Landmark, Smartphone, Wallet } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { dateTime, fullName, naira } from '@/lib/format';
+import { Badge, Empty, Identity, PageHeader, SearchInput, Spinner, StatCard, Table, Tabs, Td, Toolbar, Tr } from '../_components/ui';
+import type { Tone } from '@/lib/format';
 
-interface Transaction {
-  id: string;
-  bookingId: string;
-  userId: string;
-  customerName: string;
-  amount: number;
-  paymentMethod: string;
-  status: string;
-  carModel: string;
-  date: string;
-  createdAt?: string;
-}
+const PAY_BADGE: Record<string, { tone: Tone; label: string }> = {
+  success: { tone: 'green', label: 'Paid' },
+  pending: { tone: 'amber', label: 'Pending' },
+  failed: { tone: 'red', label: 'Failed' },
+  abandoned: { tone: 'gray', label: 'Abandoned' },
+};
 
-export default function TransactionsPage() {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([]);
+type TabValue = 'success' | 'pending' | 'failed' | 'all';
+
+const OUTCOME: Record<string, string> = {
+  booking_confirmed: 'Booking confirmed',
+  booking_confirmed_late: 'Confirmed (paid late)',
+  wallet_credited: 'Wallet topped up',
+  underpaid_credited_to_wallet: 'Underpaid, sent to wallet',
+  car_taken_credited_to_wallet: 'Car taken, sent to wallet',
+  booking_closed_credited_to_wallet: 'Booking closed, sent to wallet',
+};
+
+const CHANNEL_ICON: Record<string, typeof CreditCard> = { card: CreditCard, bank: Landmark, bank_transfer: Landmark, ussd: Smartphone, mobile_money: Smartphone };
+
+/** Every Paystack payment, matched to Paystack by its reference. */
+export default function PaymentsPage() {
+  const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [tab, setTab] = useState<TabValue>('success');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
-    loadTransactions();
+    supabase
+      .from('payments')
+      .select('reference, purpose, amount, amount_paid, status, channel, outcome, paid_at, created_at, user:profiles(first_name, last_name, email), booking:bookings(code)')
+      .order('created_at', { ascending: false })
+      .limit(500)
+      .then(({ data }) => {
+        setRows(data ?? []);
+        setLoading(false);
+      });
   }, []);
 
-  useEffect(() => {
-    // Filter transactions
-    if (searchQuery.trim() === '') {
-      setFilteredTransactions(transactions);
-    } else {
-      const filtered = transactions.filter(
-        (tx) =>
-          tx.customerName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          tx.bookingId?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          tx.carModel?.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      setFilteredTransactions(filtered);
-    }
-  }, [searchQuery, transactions]);
+  const isFailed = (p: any) => p.status === 'failed' || p.status === 'abandoned';
 
-  const loadTransactions = async () => {
-    try {
-      setLoading(true);
-      // Get all bookings (they represent transactions)
-      const bookingsQuery = query(collection(db, 'bookings'), orderBy('createdAt', 'desc'));
-      const snapshot = await getDocs(bookingsQuery);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter((p) => {
+      if (tab === 'failed' && !isFailed(p)) return false;
+      if (tab !== 'all' && tab !== 'failed' && p.status !== tab) return false;
+      if (!q) return true;
+      return [p.reference, p.user?.email, p.user?.first_name, p.user?.last_name, p.booking?.code].filter(Boolean).some((s: string) => s.toLowerCase().includes(q));
+    });
+  }, [rows, tab, search]);
 
-      const transactionsData: Transaction[] = snapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          bookingId: doc.id,
-          userId: data.userId || '',
-          customerName: data.customerName || 'Unknown',
-          amount: data.totalPrice || 0,
-          paymentMethod: data.paymentMethod || 'N/A',
-          status: data.status === 'cancelled' ? 'Refunded' : 'Completed',
-          carModel: `${data.carBrand || ''} ${data.carModel || ''}`.trim(),
-          date: data.startDate || 'N/A',
-          createdAt: data.createdAt,
-        };
-      });
+  const ok = rows.filter((p) => p.status === 'success');
+  const received = ok.reduce((sum, p) => sum + Number(p.amount_paid ?? p.amount), 0);
+  const forBookings = ok.filter((p) => p.purpose === 'booking').reduce((sum, p) => sum + Number(p.amount_paid ?? p.amount), 0);
+  const filteredTotal = filtered.reduce((sum, p) => sum + Number(p.amount_paid ?? p.amount), 0);
 
-      setTransactions(transactionsData);
-      setFilteredTransactions(transactionsData);
-    } catch (error) {
-      console.error('Error loading transactions:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const exportToCSV = () => {
-    const headers = ['Transaction ID', 'Customer', 'Car', 'Amount', 'Payment Method', 'Status', 'Date'];
-    const rows = filteredTransactions.map((tx) => [
-      tx.id,
-      tx.customerName,
-      tx.carModel,
-      tx.amount,
-      tx.paymentMethod,
-      tx.status,
-      tx.date,
-    ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map((row) => row.join(',')),
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `transactions_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
-      </div>
-    );
-  }
-
-  const totalRevenue = transactions.reduce((sum, tx) => 
-    tx.status !== 'Refunded' ? sum + tx.amount : sum, 0
-  );
-  const totalTransactions = transactions.length;
-  const avgTransaction = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
+  if (loading) return <Spinner />;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Transactions</h1>
-          <p className="mt-2 text-gray-600">
-            View all payment transactions ({filteredTransactions.length} total)
-          </p>
-        </div>
-        <button
-          onClick={exportToCSV}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700"
-        >
-          <Download className="h-5 w-5" />
-          Export CSV
-        </button>
-      </div>
+      <PageHeader title="Payments" subtitle="Money customers paid into Escardia through Paystack. Search a reference to match it in Paystack." />
 
-      {/* Stats Cards */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-lg bg-white p-6 shadow-sm ring-1 ring-gray-900/5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-600">Total Revenue</p>
-              <p className="mt-2 text-3xl font-bold text-blue-600">
-                ₦{totalRevenue.toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-lg bg-blue-100 p-3">
-              <DollarSign className="h-8 w-8 text-blue-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-lg bg-white p-6 shadow-sm ring-1 ring-gray-900/5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-600">Total Transactions</p>
-              <p className="mt-2 text-3xl font-bold text-green-600">{totalTransactions}</p>
-            </div>
-            <div className="rounded-lg bg-green-100 p-3">
-              <Calendar className="h-8 w-8 text-green-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-lg bg-white p-6 shadow-sm ring-1 ring-gray-900/5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-600">Avg Transaction</p>
-              <p className="mt-2 text-3xl font-bold text-purple-600">
-                ₦{Math.round(avgTransaction).toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-lg bg-purple-100 p-3">
-              <TrendingUp className="h-8 w-8 text-purple-600" />
-            </div>
-          </div>
-        </div>
+        <StatCard label="Received" value={naira(received)} hint={`${ok.length} successful payment${ok.length === 1 ? '' : 's'}`} icon={Banknote} />
+        <StatCard label="For bookings" value={naira(forBookings)} hint="Paid at checkout" icon={CreditCard} />
+        <StatCard label="Wallet top ups" value={naira(received - forBookings)} hint="Added to customer wallets" icon={Wallet} />
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          placeholder="Search by customer, booking ID, or car..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full rounded-lg border border-gray-300 py-2.5 pl-10 pr-4 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      <Toolbar>
+        <Tabs
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'success', label: 'Successful', count: ok.length },
+            { value: 'pending', label: 'Pending', count: rows.filter((p) => p.status === 'pending').length },
+            { value: 'failed', label: 'Failed', count: rows.filter(isFailed).length },
+            { value: 'all', label: 'All', count: rows.length },
+          ]}
         />
-      </div>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search reference, customer, trip" />
+      </Toolbar>
 
-      {/* Transactions Table */}
-      <div className="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-gray-900/5">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Transaction ID
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Customer
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Car
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Amount
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Payment Method
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
-                  Date
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
-              {filteredTransactions.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center">
-                    <p className="text-gray-500">
-                      {searchQuery ? 'No transactions found' : 'No transactions yet'}
-                    </p>
-                  </td>
-                </tr>
-              ) : (
-                filteredTransactions.map((tx) => (
-                  <tr key={tx.id} className="hover:bg-gray-50">
-                    <td className="whitespace-nowrap px-6 py-4">
-                      <div className="text-sm font-mono text-gray-900">
-                        #{tx.id.slice(0, 8)}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm font-medium text-gray-900">{tx.customerName}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm text-gray-900">{tx.carModel}</div>
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4">
-                      <div className="text-sm font-semibold text-gray-900">
-                        ₦{tx.amount.toLocaleString()}
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4">
-                      <div className="text-sm capitalize text-gray-900">{tx.paymentMethod}</div>
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4">
-                      <span
-                        className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
-                          tx.status === 'Completed'
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-red-100 text-red-700'
-                        }`}
-                      >
-                        {tx.status}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                      {tx.date}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {filtered.length === 0 ? (
+        <Empty icon={Banknote} text={search ? 'No payments match your search' : 'No payments here'} />
+      ) : (
+        <Table
+          columns={['Customer', 'For', 'Method', { label: 'Amount', align: 'right' }, 'Status', 'Date', 'Reference']}
+          footer={
+            <span className="tabular">
+              {filtered.length} payment{filtered.length === 1 ? '' : 's'} · {naira(filteredTotal)}
+            </span>
+          }
+        >
+          {filtered.map((p) => {
+            const ChannelIcon = CHANNEL_ICON[p.channel] ?? CreditCard;
+            return (
+              <Tr key={p.reference}>
+                <Td>
+                  <Identity name={fullName(p.user?.first_name, p.user?.last_name)} sub={p.user?.email} />
+                </Td>
+                <Td className="whitespace-nowrap">
+                  <p className="text-slate-900">{p.purpose === 'booking' ? `Trip ${p.booking?.code ?? ''}` : 'Wallet top up'}</p>
+                  {p.outcome && <p className="text-xs text-slate-500">{OUTCOME[p.outcome] ?? p.outcome}</p>}
+                </Td>
+                <Td className="whitespace-nowrap">
+                  {p.channel ? (
+                    <span className="inline-flex items-center gap-1.5 capitalize">
+                      <ChannelIcon className="h-3.5 w-3.5 text-slate-400" />
+                      {p.channel.replace('_', ' ')}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">-</span>
+                  )}
+                </Td>
+                <Td align="right" className="tabular whitespace-nowrap font-medium text-slate-900">
+                  {naira(p.amount_paid ?? p.amount)}
+                </Td>
+                <Td>
+                  <Badge tone={PAY_BADGE[p.status]?.tone ?? 'gray'}>{PAY_BADGE[p.status]?.label ?? p.status}</Badge>
+                </Td>
+                <Td className="whitespace-nowrap text-xs text-slate-500">{dateTime(p.paid_at ?? p.created_at)}</Td>
+                <Td className="font-mono text-xs text-slate-500">{p.reference}</Td>
+              </Tr>
+            );
+          })}
+        </Table>
+      )}
     </div>
   );
 }

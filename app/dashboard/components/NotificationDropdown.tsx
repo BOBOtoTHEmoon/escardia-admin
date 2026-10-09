@@ -1,277 +1,141 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { Bell, X, Check, AlertCircle, Info, TrendingUp } from 'lucide-react';
-import { db } from '@/lib/firebase';
-import { collection, query, orderBy, limit, getDocs, where } from 'firebase/firestore';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { Bell, ShieldAlert, Wallet, BellRing, CheckCheck } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { timeAgo } from '@/lib/format';
 
 interface Notification {
   id: string;
-  type: 'booking' | 'user' | 'vendor' | 'system' | 'alert';
   title: string;
-  message: string;
+  body: string | null;
+  type: string | null;
   read: boolean;
-  createdAt: string;
+  created_at: string;
 }
 
-export default function NotificationDropdown() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [loading, setLoading] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+export const notificationLink = (type: string | null) => {
+  if (type?.includes('withdrawal')) return '/dashboard/withdrawals';
+  if (type?.includes('dispute')) return '/dashboard/disputes';
+  return '/dashboard/notifications';
+};
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
+export const NotificationIcon = ({ type, read }: { type: string | null; read: boolean }) => {
+  const Icon = type?.includes('withdrawal') ? Wallet : type?.includes('dispute') ? ShieldAlert : BellRing;
+  const tint = read ? 'bg-slate-100 text-slate-400' : type?.includes('dispute') ? 'bg-red-50 text-red-600' : 'bg-brand-50 text-brand-600';
+  return (
+    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${tint}`}>
+      <Icon className="h-4 w-4" />
+    </div>
+  );
+};
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+/** Admin notifications: new withdrawals, disputes, etc. (created by the database). */
+export default function NotificationDropdown({ onChange }: { onChange?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<Notification[]>([]);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase
+      .from('notifications')
+      .select('id, title, body, type, read, created_at')
+      .order('created_at', { ascending: false })
+      .limit(8);
+    setItems(data ?? []);
   }, []);
 
-  // Load notifications when dropdown opens
   useEffect(() => {
-    if (isOpen) {
-      loadNotifications();
-    }
-  }, [isOpen]);
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, [load]);
 
-  const loadNotifications = async () => {
-    setLoading(true);
-    try {
-      // Generate mock notifications based on real data
-      const notifications: Notification[] = [];
+  useEffect(() => {
+    const close = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
 
-      // Check for new bookings (last 10)
-      const bookingsQuery = query(
-        collection(db, 'bookings'),
-        orderBy('createdAt', 'desc'),
-        limit(5)
-      );
-      const bookingsSnapshot = await getDocs(bookingsQuery);
-      
-      bookingsSnapshot.forEach((doc) => {
-        const booking = doc.data();
-        const createdAt = booking.createdAt || new Date().toISOString();
-        const timeAgo = getTimeAgo(createdAt);
-        
-        notifications.push({
-          id: `booking-${doc.id}`,
-          type: 'booking',
-          title: 'New Booking',
-          message: `${booking.customerName || 'A user'} booked ${booking.carBrand || ''} ${booking.carModel || 'a car'}`,
-          read: false,
-          createdAt: timeAgo,
-        });
-      });
+  const unread = items.filter((n) => !n.read).length;
 
-      // Check for new users (last 5)
-      const usersQuery = query(
-        collection(db, 'users'),
-        orderBy('createdAt', 'desc'),
-        limit(3)
-      );
-      const usersSnapshot = await getDocs(usersQuery);
-      
-      usersSnapshot.forEach((doc) => {
-        const user = doc.data();
-        const createdAt = user.createdAt || new Date().toISOString();
-        const timeAgo = getTimeAgo(createdAt);
-        
-        notifications.push({
-          id: `user-${doc.id}`,
-          type: 'user',
-          title: 'New User Registered',
-          message: `${user.firstName || 'Someone'} ${user.lastName || ''} joined the platform`,
-          read: false,
-          createdAt: timeAgo,
-        });
-      });
-
-      // Check for pending vendor approvals
-      const vendorsQuery = query(
-        collection(db, 'vendors'),
-        where('status', '==', 'pending'),
-        limit(3)
-      );
-      const vendorsSnapshot = await getDocs(vendorsQuery);
-      
-      vendorsSnapshot.forEach((doc) => {
-        const vendor = doc.data();
-        notifications.push({
-          id: `vendor-${doc.id}`,
-          type: 'vendor',
-          title: 'Vendor Approval Pending',
-          message: `${vendor.businessName || vendor.firstName || 'A vendor'} is awaiting approval`,
-          read: false,
-          createdAt: 'Pending',
-        });
-      });
-
-      // Add system notifications
-      notifications.push({
-        id: 'system-1',
-        type: 'system',
-        title: 'Platform Healthy',
-        message: 'All systems operational',
-        read: true,
-        createdAt: '1h ago',
-      });
-
-      // Sort by newest first
-      setNotifications(notifications);
-    } catch (error) {
-      console.error('Error loading notifications:', error);
-    } finally {
-      setLoading(false);
-    }
+  const markAllRead = async () => {
+    await supabase.from('notifications').update({ read: true }).eq('read', false);
+    setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+    onChange?.();
   };
 
-  const getTimeAgo = (dateString: string) => {
-    try {
-      const date = new Date(dateString);
-      const now = new Date();
-      const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-      if (diffInSeconds < 60) return 'Just now';
-      if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
-      if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
-      return `${Math.floor(diffInSeconds / 86400)}d ago`;
-    } catch {
-      return 'Just now';
+  const openItem = async (n: Notification) => {
+    setOpen(false);
+    if (!n.read) {
+      await supabase.from('notifications').update({ read: true }).eq('id', n.id);
+      setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
+      onChange?.();
     }
   };
-
-  const getNotificationIcon = (type: string) => {
-    switch (type) {
-      case 'booking':
-        return <TrendingUp className="h-5 w-5 text-blue-600" />;
-      case 'user':
-        return <Check className="h-5 w-5 text-green-600" />;
-      case 'vendor':
-        return <AlertCircle className="h-5 w-5 text-orange-600" />;
-      case 'alert':
-        return <AlertCircle className="h-5 w-5 text-red-600" />;
-      default:
-        return <Info className="h-5 w-5 text-gray-600" />;
-    }
-  };
-
-  const getNotificationBg = (type: string) => {
-    switch (type) {
-      case 'booking':
-        return 'bg-blue-100';
-      case 'user':
-        return 'bg-green-100';
-      case 'vendor':
-        return 'bg-orange-100';
-      case 'alert':
-        return 'bg-red-100';
-      default:
-        return 'bg-gray-100';
-    }
-  };
-
-  const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (
-   <div ref={dropdownRef} className="relative z-[60]">
-      {/* Bell Icon Button */}
+    <div className="relative" ref={ref}>
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="relative rounded-full p-2 text-gray-500 hover:bg-gray-100 transition-colors"
+        onClick={() => {
+          setOpen(!open);
+          if (!open) load();
+        }}
+        className={`relative rounded-lg p-2 transition-colors ${open ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+        aria-label="Notifications"
       >
         <Bell className="h-5 w-5" />
-        {unreadCount > 0 && (
-          <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
-            {unreadCount > 9 ? '9+' : unreadCount}
-          </span>
-        )}
+        {unread > 0 && <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />}
       </button>
 
-      {/* Dropdown */}
-{isOpen && (
-  <div className="fixed right-4 sm:right-6 top-[72px] w-80 sm:w-96 rounded-xl bg-white shadow-2xl ring-1 ring-black/10 z-[100]">
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-            <div>
-              <h3 className="font-semibold text-gray-900">Notifications</h3>
-              <p className="text-xs text-gray-500">
-                {unreadCount} unread notification{unreadCount !== 1 ? 's' : ''}
-              </p>
+      {open && (
+        <div className="fixed inset-x-3 top-16 z-50 animate-pop-in overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96">
+          <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-slate-900">Notifications</h3>
+              {unread > 0 && <span className="rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold text-white">{unread}</span>}
             </div>
-            <button
-              onClick={() => setIsOpen(false)}
-              className="rounded-lg p-1 text-gray-400 hover:bg-gray-100"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-
-          {/* Notifications List */}
-          <div className="max-h-[400px] overflow-y-auto">
-            {loading ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600" />
-              </div>
-            ) : notifications.length === 0 ? (
-              <div className="py-8 text-center">
-                <Bell className="mx-auto h-12 w-12 text-gray-300" />
-                <p className="mt-2 text-sm text-gray-500">No notifications yet</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-100">
-                {notifications.map((notification) => (
-                  <div
-                    key={notification.id}
-                    className={`p-4 transition-colors hover:bg-gray-50 ${
-                      !notification.read ? 'bg-blue-50/50' : ''
-                    }`}
-                  >
-                    <div className="flex gap-3">
-                      <div className={`flex-shrink-0 rounded-lg p-2 ${getNotificationBg(notification.type)}`}>
-                        {getNotificationIcon(notification.type)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-sm font-medium text-gray-900">
-                            {notification.title}
-                          </p>
-                          {!notification.read && (
-                            <div className="h-2 w-2 flex-shrink-0 rounded-full bg-blue-600 mt-1" />
-                          )}
-                        </div>
-                        <p className="mt-1 text-sm text-gray-600 line-clamp-2">
-                          {notification.message}
-                        </p>
-                        <p className="mt-1 text-xs text-gray-400">
-                          {notification.createdAt}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+            {unread > 0 && (
+              <button onClick={markAllRead} className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700">
+                <CheckCheck className="h-3.5 w-3.5" /> Mark all read
+              </button>
             )}
           </div>
-
-          {/* Footer */}
-          {notifications.length > 0 && (
-            <div className="border-t border-gray-200 p-3">
-              <button
-                onClick={() => {
-                  setIsOpen(false);
-                  window.location.href = '/dashboard/notifications';
-                }}
-                className="w-full rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors"
-              >
-                View All Notifications
-              </button>
-            </div>
-          )}
+          <div className="max-h-[420px] overflow-y-auto border-t border-slate-100">
+            {items.length === 0 ? (
+              <div className="flex flex-col items-center px-6 py-10 text-center">
+                <Bell className="h-6 w-6 text-slate-300" />
+                <p className="mt-2 text-sm text-slate-500">You&apos;re all caught up</p>
+              </div>
+            ) : (
+              items.map((n) => (
+                <Link
+                  key={n.id}
+                  href={notificationLink(n.type)}
+                  onClick={() => openItem(n)}
+                  className="flex gap-3 border-b border-slate-50 px-4 py-3 transition-colors last:border-0 hover:bg-slate-50"
+                >
+                  <NotificationIcon type={n.type} read={n.read} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className={`text-sm ${n.read ? 'text-slate-600' : 'font-medium text-slate-900'}`}>{n.title}</p>
+                      {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-600" />}
+                    </div>
+                    {n.body && <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{n.body}</p>}
+                    <p className="mt-1 text-[11px] text-slate-400">{timeAgo(n.created_at)}</p>
+                  </div>
+                </Link>
+              ))
+            )}
+          </div>
+          <Link
+            href="/dashboard/notifications"
+            onClick={() => setOpen(false)}
+            className="block border-t border-slate-100 px-4 py-3 text-center text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+          >
+            View all notifications
+          </Link>
         </div>
       )}
     </div>
