@@ -1,11 +1,11 @@
 'use client';
 
 import { ReactNode, useEffect, useMemo, useState } from 'react';
-import { Percent, ShieldCheck, Clock, Wallet } from 'lucide-react';
+import { Percent, ShieldCheck, Clock, Wallet, ToggleRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { dateTime, naira } from '@/lib/format';
 import { AffixInput, Button, Callout, Card, Field, PageHeader, Spinner } from '../_components/ui';
-import { toast } from '../_components/feedback';
+import { confirmAction, toast } from '../_components/feedback';
 
 interface Settings {
   commission_rate: number;
@@ -20,10 +20,30 @@ interface Settings {
   withdrawal_fee: number;
   min_withdrawal: number;
   withdrawals_require_approval: boolean;
+  security_enabled: boolean;
+  self_drive_enabled: boolean;
   updated_at: string;
 }
 
-type Form = Record<Exclude<keyof Settings, 'updated_at' | 'withdrawals_require_approval' | 'commission_rate'> | 'commission_pct', string>;
+type FeatureKey = 'security_enabled' | 'self_drive_enabled';
+
+type Form = Record<Exclude<keyof Settings, 'updated_at' | 'withdrawals_require_approval' | 'commission_rate' | FeatureKey> | 'commission_pct', string>;
+
+/** Switches that show or hide whole features in the mobile app. They save straight away. */
+const FEATURES: { key: FeatureKey; title: string; on: string; off: string }[] = [
+  {
+    key: 'security_enabled',
+    title: 'Security escorts',
+    on: 'Customers can add LEGION or PRIVATE security and a Hilux backup when they book.',
+    off: 'The Security step and all mentions of escorts are hidden in the app. New bookings cannot include security.',
+  },
+  {
+    key: 'self_drive_enabled',
+    title: 'Self-drive',
+    on: 'The self-drive option shows on the booking screen.',
+    off: 'Every trip comes with a driver. The self-drive option is hidden.',
+  },
+];
 
 const KEYS = [
   'service_fee',
@@ -51,6 +71,7 @@ export default function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null);
   const [form, setForm] = useState<Form | null>(null);
   const [saving, setSaving] = useState(false);
+  const [switching, setSwitching] = useState<FeatureKey | null>(null);
 
   useEffect(() => {
     supabase
@@ -89,6 +110,32 @@ export default function SettingsPage() {
     toast.success('Settings saved. New bookings use these numbers from now on.');
   };
 
+  const toggleFeature = async (key: FeatureKey, title: string) => {
+    const next = !s[key];
+    const ok = await confirmAction({
+      title: `${next ? 'Turn on' : 'Turn off'} ${title.toLowerCase()}?`,
+      message: next
+        ? `${title} will show in the app for every customer the next time they open it.`
+        : `${title} will be hidden in the app for every customer the next time they open it. Bookings that already have it are not changed.`,
+      confirmLabel: next ? 'Turn on' : 'Turn off',
+      tone: next ? 'primary' : 'danger',
+    });
+    if (!ok) return;
+    setSwitching(key);
+    const { data, error } = await supabase
+      .from('settings')
+      .update({ [key]: next, updated_at: new Date().toISOString() })
+      .eq('id', true)
+      .select()
+      .single();
+    setSwitching(null);
+    if (error) return toast.error(error.message);
+    const fresh = data as Settings;
+    setS(fresh);
+    // Keep any unsaved price edits in the form.
+    toast.success(`${title} is now ${next ? 'on' : 'off'} in the app.`);
+  };
+
   // Example booking so the effect of the numbers is easy to see
   const exampleRental = 100000;
   const exampleCommission = exampleRental * (Number(form.commission_pct) / 100);
@@ -100,6 +147,28 @@ export default function SettingsPage() {
 
       <Callout tone="info">Changes apply to new bookings only. Trips that are already booked keep the prices they were paid at.</Callout>
 
+      <SettingsSection icon={ToggleRight} title="App features" description="Show or hide whole features in the mobile app. These save as soon as you switch them.">
+        <div className="divide-y divide-slate-100">
+          {FEATURES.map((f) => {
+            const on = !!s[f.key];
+            return (
+              <div key={f.key} className="flex items-start justify-between gap-6 py-4 first:pt-0 last:pb-0">
+                <div>
+                  <p className="font-medium text-slate-900">
+                    {f.title}{' '}
+                    <span className={`ml-1 rounded-full px-2 py-0.5 text-xs font-medium ${on ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                      {on ? 'On' : 'Off'}
+                    </span>
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">{on ? f.on : f.off}</p>
+                </div>
+                <Switch on={on} busy={switching === f.key} label={f.title} onClick={() => toggleFeature(f.key, f.title)} />
+              </div>
+            );
+          })}
+        </div>
+      </SettingsSection>
+
       <SettingsSection icon={Percent} title="Commission and fees" description="What Escardia earns on every booking.">
         <div className="grid gap-5 sm:grid-cols-3">
           <Field label="Commission" hint="Taken from car rental and delivery">
@@ -108,7 +177,7 @@ export default function SettingsPage() {
           <Field label="Service fee" hint="Flat fee per booking">
             <AffixInput prefix="₦" value={form.service_fee} onChange={set('service_fee')} />
           </Field>
-          <Field label="Delivery fee" hint="When the car is delivered">
+          <Field label="Delivery fee" hint="Charged only when self-drive is on">
             <AffixInput prefix="₦" value={form.delivery_fee} onChange={set('delivery_fee')} />
           </Field>
         </div>
@@ -178,6 +247,24 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function Switch({ on, busy, label, onClick }: { on: boolean; busy: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={busy}
+      onClick={onClick}
+      className={`relative mt-0.5 inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors disabled:cursor-wait disabled:opacity-60 ${
+        on ? 'bg-brand-600' : 'bg-slate-300'
+      }`}
+    >
+      <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${on ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+    </button>
   );
 }
 
